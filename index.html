@@ -259,22 +259,47 @@
   var state = { range: '30d', lastData: null };
   var REFRESH_MS = 60000;
 
-  // 云端快照的访问令牌。地址形如 https://<worker>.workers.dev/#k=<TOKEN>。
-  // 令牌放在 URL 片段里而不是查询串：片段不会发给服务器，因此不会进 Cloudflare 的请求日志。
+  // 数据来源有两种：
+  //   1. 直接连 PC —— 走相对路径 /api/*，实时数据（默认）
+  //   2. 读 GitHub gist 里的快照 —— 地址带 #g=<owner>/<gistId> 时启用，
+  //      这样 PC 关机时手机也能看（快照最多旧 5 分钟）。
+  // gist 标识放在 URL 片段里：片段不会发给服务器，因此不会出现在任何请求日志里。
   // 存 localStorage 而不是 cookie —— APK 是裸 WebView，没配 CookieManager、也没调 flush()，
-  // cookie 在应用冷启动后不保证还在；而 APK 已经开了 setDomStorageEnabled，localStorage 是可靠的。
-  // 直接连 PC 时这段为空，请求与改造前逐字节相同。
-  var TTD_TOKEN = (function () {
-    var m = (location.hash || '').match(/(?:^#|&)k=([A-Za-z0-9_-]{16,128})/);
+  // cookie 在应用冷启动后不保证还在；而 APK 已经开了 setDomStorageEnabled。
+  var GIST = (function () {
+    var m = (location.hash || '').match(/(?:^#|&)g=([A-Za-z0-9_.-]+\/[a-f0-9]{16,})/);
     if (m) {
-      try { localStorage.setItem('ttdToken', m[1]); } catch (e) {}
+      try { localStorage.setItem('ttdGist', m[1]); } catch (e) {}
       return m[1];
     }
-    try { return localStorage.getItem('ttdToken') || ''; } catch (e) { return ''; }
+    try { return localStorage.getItem('ttdGist') || ''; } catch (e) { return ''; }
   })();
 
-  function apiFetch(path) {
-    return fetch(path, TTD_TOKEN ? { headers: { 'X-TTD-Token': TTD_TOKEN } } : undefined);
+  // gist 的 raw 走 CDN，不受 GitHub API「未认证 60 次/小时」的限制；
+  // ?t= 用来避开 CDN 缓存，否则可能拿到几分钟前的旧快照。
+  function fetchGistSnapshot() {
+    var url = 'https://gist.githubusercontent.com/' + GIST + '/raw/snapshot.json?t=' + Date.now();
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error('读取快照失败：HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+  function getStats(range) {
+    if (!GIST) return fetch('/api/stats?range=' + range).then(function (r) { return r.json(); });
+    return fetchGistSnapshot().then(function (snap) {
+      var s = snap.stats && snap.stats[range];
+      if (!s) return { noSnapshot: true };
+      return Object.assign({}, s, { snapshotAt: snap.snapshotAt || null });
+    });
+  }
+
+  function getBalances() {
+    if (!GIST) return fetch('/api/balances').then(function (r) { return r.json(); });
+    return fetchGistSnapshot().then(function (snap) {
+      if (!snap.balances) return { ok: false, error: '云端暂无快照（PC 端首次上传后即可显示）' };
+      return Object.assign({}, snap.balances, { snapshotAt: snap.snapshotAt || null });
+    });
   }
 
   var fmtInt = new Intl.NumberFormat('zh-CN');
@@ -359,7 +384,7 @@
 
   // 各渠道真实余额与累计消费。跟随 KPI 一起重绘，所以 60 秒定时刷新会自动带上它。
   function renderBalances() {
-    apiFetch('/api/balances').then(function (r) { return r.json(); }).then(function (b) {
+    getBalances().then(function (b) {
       if (!b || !b.ok) {
         setTile('balTile', '--', (b && b.error) || '读取失败');
         setTile('spentTile', '--', (b && b.error) || '读取失败');
@@ -883,14 +908,19 @@
   function load(range) {
     var wrap = document.querySelector('.wrap');
     wrap.style.opacity = '0.6';
-    apiFetch('/api/stats?range=' + range)
-      .then(function (r) { return r.json(); })
+    getStats(range)
       .then(function (d) {
-        // 401 不能当成「连不上」：fetch 在 401 时是 resolve 的，
-        // 真实原因是令牌缺失或失效，提示得说对方向。
-        if (d && d.error === 'unauthorized') {
+        // 快照还没生成（PC 端还没推过）：只给提示，
+        // 不渲染一堆 0 —— 否则看起来像「数据全是零」而不是「还没数据」。
+        if (d && d.noSnapshot) {
           wrap.style.opacity = '1';
-          setOffline(true, '云端令牌缺失或已失效。请用带 #k=<令牌> 的地址重新打开。');
+          setOffline(false);
+          var note = document.getElementById('snapshotNote');
+          if (note) {
+            note.hidden = false;
+            setText(note, '云端还没有快照：PC 端首次上传后即可显示。');
+          }
+          setText(document.getElementById('footTip'), '尚无数据。');
           return;
         }
         state.lastData = d;
@@ -916,24 +946,19 @@
     renderModelTable(d.byModel);
     renderAdvice(d.advice);
 
-    // noSnapshot / snapshotAt 是云端快照特有的字段。直接连 PC 的响应里没有它们，
+    // snapshotAt 是快照数据特有的字段。直接连 PC 的响应里没有它，
     // 所以本地页面的观感与改造前完全一致。
     var note = document.getElementById('snapshotNote');
     if (note) {
-      if (d.noSnapshot) {
+      if (d.snapshotAt) {
         note.hidden = false;
-        setText(note, '云端还没有快照：PC 端首次上传后即可显示。');
-      } else if (d.snapshotAt) {
-        note.hidden = false;
-        setText(note, '云端快照 · ' + new Date(d.snapshotAt).toLocaleString('zh-CN', { hour12: false }) + '（PC 关闭时显示的就是这份数据）');
+        setText(note, '快照数据 · ' + new Date(d.snapshotAt).toLocaleString('zh-CN', { hour12: false }) + '（PC 关机时看到的就是这一份）');
       } else {
         note.hidden = true;
       }
     }
 
-    setText(document.getElementById('footTip'), d.noSnapshot
-      ? '尚无数据：PC 端首次上传快照后就会出现。'
-      : '扫描到 ' + d.filesScanned + ' 个会话日志文件；Token 与渠道费用每 60 秒自动刷新，也可点右上角 ⟳ 手动刷新。');
+    setText(document.getElementById('footTip'), '扫描到 ' + d.filesScanned + ' 个会话日志文件；Token 与渠道费用每 60 秒自动刷新，也可点右上角 ⟳ 手动刷新。');
   }
 
   document.getElementById('rangeSwitch').addEventListener('click', function (evt) {
