@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#2a78d6" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="apple-touch-icon" href="/icon-192.png" />
+<title>Token 流量观察仪表盘</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --good-text:      #006300;
+
+    --series-1: #2a78d6; /* input */
+    --series-2: #eb6834; /* output */
+    --series-3: #1baf7a; /* cache creation */
+    --series-4: #eda100; /* cache read */
+
+    --seq-300: #6da7ec;
+    --seq-450: #2a78d6;
+    --seq-600: #184f95;
+
+    --status-good: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --good-text:      #0ca30c;
+
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+
+      --seq-300: #3987e5;
+      --seq-450: #2a78d6;
+      --seq-600: #184f95;
+
+      --status-good: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --good-text:      #0ca30c;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+
+    --seq-300: #3987e5;
+    --seq-450: #2a78d6;
+    --seq-600: #184f95;
+
+    --status-good: #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--page-plane); color: var(--text-primary); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 20px 60px; }
+
+  header.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: var(--text-secondary); font-size: 14px; margin: 0; }
+
+  .controls { display: flex; align-items: center; gap: 10px; }
+  .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .segmented button {
+    appearance: none; border: none; background: transparent; color: var(--text-secondary);
+    padding: 8px 16px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .segmented button + button { border-left: 1px solid var(--border); }
+  .segmented button.active { background: var(--text-primary); color: var(--surface-1); font-weight: 600; }
+  .refresh-btn {
+    appearance: none; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+    border-radius: 10px; padding: 8px 12px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .refresh-btn:hover { color: var(--text-primary); }
+
+  .kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 28px; }
+  @media (max-width: 980px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 10px; min-height: 108px;
+  }
+  .tile .label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+  .tile .icon { width: 18px; height: 18px; opacity: 0.8; flex: none; }
+  .tile .value { font-size: 26px; font-weight: 600; line-height: 1.1; }
+  .tile .value small { font-size: 14px; font-weight: 500; color: var(--text-secondary); }
+  .tile .foot { font-size: 12px; color: var(--text-muted); }
+  .tile .foot.good { color: var(--good-text); }
+  .tile.dim { opacity: 0.55; }
+
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px;
+    margin-bottom: 24px;
+  }
+  .panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  .panel-head h2 { font-size: 16px; margin: 0; }
+  .panel-head .hint { font-size: 12px; color: var(--text-muted); }
+  .table-toggle {
+    appearance: none; border: none; background: none; color: var(--text-secondary); font-size: 12px;
+    cursor: pointer; font-family: inherit; text-decoration: underline; padding: 0;
+  }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary); }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .legend .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+
+  .chart-shell { position: relative; }
+  svg.chart { width: 100%; display: block; overflow: visible; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+    transform: translate(-50%, -100%); white-space: nowrap; z-index: 5; visibility: hidden;
+  }
+  .tooltip .t-date { color: var(--text-muted); margin-bottom: 4px; }
+  .tooltip .t-row { display: flex; align-items: center; gap: 6px; justify-content: space-between; gap: 12px; }
+  .tooltip .t-key { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .tooltip .t-key .line { width: 10px; height: 2px; border-radius: 1px; }
+  .tooltip .t-val { font-weight: 600; }
+
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.data-table th, table.data-table td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
+  table.data-table th:first-child, table.data-table td:first-child { text-align: left; font-variant-numeric: normal; }
+  table.data-table th { color: var(--text-muted); font-weight: 500; font-size: 12px; }
+  table.data-table tbody tr:last-child td { border-bottom: none; }
+  .tier-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .tier-badge.advanced { background: rgba(235,104,52,0.15); color: var(--series-2); }
+  .tier-badge.balanced { background: rgba(42,120,214,0.15); color: var(--series-1); }
+  .tier-badge.economy { background: rgba(27,175,122,0.15); color: var(--series-3); }
+  .tier-badge.none { background: var(--gridline); color: var(--text-muted); }
+  .table-wrap { overflow-x: auto; }
+
+  .advice-list { display: flex; flex-direction: column; gap: 12px; }
+  .advice-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; }
+  .advice-card .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--series-1); margin-top: 6px; flex: none; }
+  .advice-card .body h3 { margin: 0 0 4px; font-size: 14px; }
+  .advice-card .body p { margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+  .empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+
+  footer.tip { color: var(--text-muted); font-size: 12px; margin-top: 8px; }
+
+  /* 连不上服务器时的顶部横幅。没有它，离线只会表现成「一片空白面板」，
+     看起来像数据丢了，而不是网络断了。 */
+  .offline-banner {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    background: rgba(235,104,52,0.12); border: 1px solid var(--series-2);
+    border-radius: 12px; padding: 12px 16px; margin-bottom: 18px; font-size: 13px;
+  }
+  .offline-banner[hidden] { display: none; }
+  .offline-banner strong { color: var(--series-2); flex: none; }
+  .offline-banner span { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="offline-banner" id="offlineBanner" hidden>
+    <strong>连不上服务器</strong>
+    <span id="offlineDetail"></span>
+  </div>
+
+  <header class="top">
+    <div>
+      <h1>Token 流量观察仪表盘</h1>
+      <p class="sub">两个渠道（DeepSeek 官方 / luisclaw 中转站）的请求、Token、真实余额与累计消费，以及「哪些任务该换节省模型」的建议。</p>
+      <p class="sub" id="snapshotNote" hidden></p>
+    </div>
+    <div class="controls">
+      <div class="segmented" id="rangeSwitch">
+        <button data-range="24h">24小时</button>
+        <button data-range="7d">7天</button>
+        <button data-range="30d" class="active">30天</button>
+      </div>
+      <button class="refresh-btn" id="refreshBtn" title="立即刷新">&#10227;</button>
+    </div>
+  </header>
+
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>渠道费用</h2>
+      <span class="hint">余额与累计消费取自各渠道官方接口；Token 为本地日志按模型名前缀归因</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table" id="providerTable"></table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>流量趋势</h2>
+      <button class="table-toggle" data-target="trafficTable">查看数据表</button>
+    </div>
+    <div class="legend" id="trafficLegend"></div>
+    <div class="chart-shell">
+      <svg class="chart" id="trafficChart"></svg>
+      <div class="tooltip" id="trafficTooltip"></div>
+    </div>
+    <div class="table-wrap" id="trafficTable" hidden></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>模型分布</h2>
+      <span class="hint">按窗口内 token 总量排序</span>
+    </div>
+    <div class="chart-shell">
+      <svg class="chart" id="modelChart"></svg>
+      <div class="tooltip" id="modelTooltip"></div>
+    </div>
+    <div class="table-wrap" style="margin-top:16px;">
+      <table class="data-table" id="modelTable"></table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>模型分工建议</h2>
+      <span class="hint">纯本地启发式规则，不调用任何模型；仅供参考，最终由你决定</span>
+    </div>
+    <div class="advice-list" id="adviceList"></div>
+  </section>
+
+  <footer class="tip" id="footTip"></footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var state = { range: '30d', lastData: null };
+  var REFRESH_MS = 60000;
+
+  // 云端快照的访问令牌。地址形如 https://<worker>.workers.dev/#k=<TOKEN>。
+  // 令牌放在 URL 片段里而不是查询串：片段不会发给服务器，因此不会进 Cloudflare 的请求日志。
+  // 存 localStorage 而不是 cookie —— APK 是裸 WebView，没配 CookieManager、也没调 flush()，
+  // cookie 在应用冷启动后不保证还在；而 APK 已经开了 setDomStorageEnabled，localStorage 是可靠的。
+  // 直接连 PC 时这段为空，请求与改造前逐字节相同。
+  var TTD_TOKEN = (function () {
+    var m = (location.hash || '').match(/(?:^#|&)k=([A-Za-z0-9_-]{16,128})/);
+    if (m) {
+      try { localStorage.setItem('ttdToken', m[1]); } catch (e) {}
+      return m[1];
+    }
+    try { return localStorage.getItem('ttdToken') || ''; } catch (e) { return ''; }
+  })();
+
+  function apiFetch(path) {
+    return fetch(path, TTD_TOKEN ? { headers: { 'X-TTD-Token': TTD_TOKEN } } : undefined);
+  }
+
+  var fmtInt = new Intl.NumberFormat('zh-CN');
+  function compact(n) {
+    if (n == null) return '--';
+    var abs = Math.abs(n);
+    if (abs >= 1e8) return (n / 1e8).toFixed(2) + '亿';
+    if (abs >= 1e4) return (n / 1e4).toFixed(1) + '万';
+    return fmtInt.format(Math.round(n));
+  }
+  function money(n, currency) {
+    if (n == null) return '--';
+    var sym = currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : '';
+    return sym + n.toFixed(2);
+  }
+  function pct(n) { return Math.round(n * 100) + '%'; }
+
+  function css(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function setText(el, text) {
+    el.textContent = text;
+  }
+
+  // ---- KPI ----
+  function renderKpis(d) {
+    var row = document.getElementById('kpiRow');
+    row.innerHTML = '';
+
+    var tiles = [
+      {
+        label: '实际模型',
+        value: String(d.modelCount),
+        foot: d.dateRange.from ? (d.dateRange.from + ' 至 ' + d.dateRange.to) : '暂无数据',
+      },
+      {
+        label: 'Token 用量',
+        value: compact(d.totalTokens),
+        foot: d.requestCount + ' 次请求 · 窗口累计',
+      },
+      {
+        label: 'RPM / TPM',
+        value: d.rpm.toFixed(2) + ' <small>/</small> ' + compact(Math.round(d.tpm)),
+        foot: d.avgDurationMs != null ? ('平均单轮耗时 ' + fmtInt.format(d.avgDurationMs) + ' ms') : '暂无耗时数据',
+      },
+      { id: 'balTile', label: '余额合计', value: '--', foot: '读取中…', dim: true },
+      { id: 'spentTile', label: '消费合计', value: '--', foot: '读取中…', dim: true },
+    ];
+
+    tiles.forEach(function (t) {
+      var tile = document.createElement('div');
+      if (t.id) tile.id = t.id;
+      tile.className = 'tile' + (t.dim ? ' dim' : '');
+      var label = document.createElement('div');
+      label.className = 'label';
+      setText(label, t.label);
+      var value = document.createElement('div');
+      value.className = 'value';
+      value.innerHTML = t.value; // 仅由本函数内构造的可信字符串（数字 + 固定标签），不含用户/远端数据
+      var foot = document.createElement('div');
+      foot.className = 'foot' + (t.good ? ' good' : '');
+      setText(foot, t.foot);
+      tile.appendChild(label);
+      tile.appendChild(value);
+      tile.appendChild(foot);
+      row.appendChild(tile);
+    });
+
+    renderBalances();
+  }
+
+  function setTile(id, value, foot, good) {
+    var tile = document.getElementById(id);
+    if (!tile) return;
+    tile.classList.remove('dim');
+    setText(tile.querySelector('.value'), value);
+    var footEl = tile.querySelector('.foot');
+    footEl.className = 'foot' + (good ? ' good' : '');
+    setText(footEl, foot);
+  }
+
+  // 各渠道真实余额与累计消费。跟随 KPI 一起重绘，所以 60 秒定时刷新会自动带上它。
+  function renderBalances() {
+    apiFetch('/api/balances').then(function (r) { return r.json(); }).then(function (b) {
+      if (!b || !b.ok) {
+        setTile('balTile', '--', (b && b.error) || '读取失败');
+        setTile('spentTile', '--', (b && b.error) || '读取失败');
+        renderProviderPanel(null);
+        return;
+      }
+      var base = b.baseCurrency;
+      setTile(
+        'balTile',
+        b.totals.balance == null ? '--' : money(b.totals.balance, base),
+        b.totals.balance == null ? failHint(b) : ('折算为 ' + base + '，汇率 ' + b.cnyRate),
+        b.totals.balance != null
+      );
+      setTile(
+        'spentTile',
+        b.totals.spent == null ? '--' : money(b.totals.spent, base),
+        b.totals.spent == null ? failHint(b) : '两家口径不同（累计 / 窗口），明细见下表',
+        b.totals.spent != null
+      );
+      renderProviderPanel(b);
+    }).catch(function () {
+      setTile('balTile', '--', '读取失败');
+      setTile('spentTile', '--', '读取失败');
+      renderProviderPanel(null);
+    });
+  }
+
+  function failHint(b) {
+    var bad = b.providers.filter(function (p) { return !p.ok; });
+    if (!bad.length) return '查询失败';
+    return '未取到：' + bad.map(function (p) { return p.label; }).join('、');
+  }
+
+  // 按币种分开显示，对齐官方页面那种「$0.00 USD + ¥5.45 CNY」的写法
+  var CURRENCY_ORDER = { USD: 0, CNY: 1 };
+  function sortAmounts(amts) {
+    return amts.slice().sort(function (a, b) {
+      var oa = CURRENCY_ORDER[a.currency];
+      var ob = CURRENCY_ORDER[b.currency];
+      return (oa === undefined ? 9 : oa) - (ob === undefined ? 9 : ob);
+    });
+  }
+  function balanceText(p) {
+    var amts = p && p.amounts;
+    if (amts && amts.length) {
+      return sortAmounts(amts).map(function (a) { return money(a.balance, a.currency); }).join(' + ');
+    }
+    return money(p ? p.balance : null, p ? p.currency : null);
+  }
+  function spentText(p) {
+    var amts = p && p.amounts;
+    var hasCost = amts && amts.length && amts.some(function (a) { return a.cost != null; });
+    if (hasCost) {
+      return sortAmounts(amts).map(function (a) { return money(a.cost == null ? 0 : a.cost, a.currency); }).join(' + ');
+    }
+    return money(p ? p.spent : null, p ? p.currency : null);
+  }
+
+  // 渠道明细表：费用来自官方接口，Token 来自本地日志按模型名前缀归因
+  function renderProviderPanel(b) {
+    var table = document.getElementById('providerTable');
+    table.innerHTML = '';
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    ['渠道', '模型', '余额', '消费', '消费 / 明细', '窗口请求数', '窗口 Token'].forEach(function (h) {
+      var th = document.createElement('th');
+      setText(th, h);
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+
+    var usageList = (state.lastData && state.lastData.byProvider) || [];
+    var usageById = {};
+    var unknownUsage = null;
+    usageList.forEach(function (u) {
+      if (u.id) usageById[u.id] = u;
+      else unknownUsage = u;
+    });
+
+    var configured = (b && b.providers) || [];
+    var ids = configured.map(function (p) { return p.id; });
+    usageList.forEach(function (u) { if (u.id && ids.indexOf(u.id) < 0) ids.push(u.id); });
+
+    var tbody = document.createElement('tbody');
+    ids.forEach(function (id) {
+      var p = null;
+      for (var i = 0; i < configured.length; i++) { if (configured[i].id === id) p = configured[i]; }
+      var u = usageById[id] || {};
+      var ok = !!(p && p.ok);
+      var miss = (p && p.configured) ? '查询失败' : '未配置';
+      var cells = [
+        (p && p.label) || id,
+        (u.models || []).join(', ') || '—',
+        ok ? balanceText(p) : miss,
+        ok ? spentText(p) : miss,
+        ok ? (p.spentNote || '—') : '—',
+        fmtInt.format(u.requestCount || 0),
+        compact(u.total || 0),
+      ];
+      var tr = document.createElement('tr');
+      cells.forEach(function (val, idx) {
+        var td = document.createElement('td');
+        setText(td, val);
+        if (idx === 0 && p && p.error) td.title = p.error;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+
+    if (unknownUsage && unknownUsage.total > 0) {
+      var trUnknown = document.createElement('tr');
+      ['未归属渠道', (unknownUsage.models || []).join(', '), '—', '—', '—', fmtInt.format(unknownUsage.requestCount), compact(unknownUsage.total)].forEach(function (val) {
+        var td = document.createElement('td');
+        setText(td, val);
+        trUnknown.appendChild(td);
+      });
+      tbody.appendChild(trUnknown);
+    }
+
+    if (b && b.ok) {
+      var trTotal = document.createElement('tr');
+      [
+        '合计（' + b.baseCurrency + '）',
+        '—',
+        b.totals.balance == null ? '--' : money(b.totals.balance, b.baseCurrency),
+        b.totals.spent == null ? '—' : money(b.totals.spent, b.baseCurrency),
+        '口径不同，仅供参考',
+        fmtInt.format(state.lastData ? state.lastData.requestCount : 0),
+        compact(state.lastData ? state.lastData.totalTokens : 0),
+      ].forEach(function (val) {
+        var td = document.createElement('td');
+        setText(td, val);
+        trTotal.appendChild(td);
+      });
+      tbody.appendChild(trTotal);
+    }
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+  }
+
+  // ---- 流量趋势：堆叠面积图 ----
+  var TRAFFIC_KEYS = ['input', 'output', 'cacheCreation', 'cacheRead'];
+  var TRAFFIC_LABELS = { input: '输入', output: '输出', cacheCreation: '缓存写入', cacheRead: '缓存读取' };
+  var TRAFFIC_COLOR_VAR = { input: '--series-1', output: '--series-2', cacheCreation: '--series-3', cacheRead: '--series-4' };
+
+  function renderTrafficLegend() {
+    var legend = document.getElementById('trafficLegend');
+    legend.innerHTML = '';
+    TRAFFIC_KEYS.forEach(function (k) {
+      var item = document.createElement('div');
+      item.className = 'item';
+      var sw = document.createElement('span');
+      sw.className = 'swatch';
+      sw.style.background = css(TRAFFIC_COLOR_VAR[k]);
+      var label = document.createElement('span');
+      setText(label, TRAFFIC_LABELS[k]);
+      item.appendChild(sw);
+      item.appendChild(label);
+      legend.appendChild(item);
+    });
+  }
+
+  function formatKeyLabel(key, range) {
+    if (range === '24h') {
+      var parts = key.split(' ');
+      return parts[1] || key;
+    }
+    var d = key.split('-');
+    return d[1] + '/' + d[2];
+  }
+
+  function renderTrafficChart(series, range) {
+    var svg = document.getElementById('trafficChart');
+    var width = svg.clientWidth || 800;
+    var height = 300;
+    var padL = 44, padR = 12, padT = 16, padB = 28;
+    var plotW = width - padL - padR;
+    var plotH = height - padT - padB;
+
+    var maxTotal = 0;
+    series.forEach(function (s) { if (s.total > maxTotal) maxTotal = s.total; });
+    if (maxTotal <= 0) maxTotal = 1;
+    var niceMax = niceCeil(maxTotal);
+
+    var n = series.length;
+    var stepX = n > 1 ? plotW / (n - 1) : 0;
+    function xAt(i) { return padL + stepX * i; }
+    function yAt(v) { return padT + plotH - (v / niceMax) * plotH; }
+
+    var gridline = css('--gridline'), baseline = css('--baseline'), muted = css('--text-muted');
+
+    var svgns = 'http://www.w3.org/2000/svg';
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+
+    // 网格线 + y 轴刻度
+    var ticks = 4;
+    for (var t = 0; t <= ticks; t++) {
+      var val = (niceMax / ticks) * t;
+      var y = yAt(val);
+      var line = document.createElementNS(svgns, 'line');
+      line.setAttribute('x1', padL); line.setAttribute('x2', width - padR);
+      line.setAttribute('y1', y); line.setAttribute('y2', y);
+      line.setAttribute('stroke', gridline); line.setAttribute('stroke-width', '1');
+      svg.appendChild(line);
+
+      var label = document.createElementNS(svgns, 'text');
+      label.setAttribute('x', padL - 8); label.setAttribute('y', y + 4);
+      label.setAttribute('text-anchor', 'end'); label.setAttribute('font-size', '11'); label.setAttribute('fill', muted);
+      label.textContent = compact(val);
+      svg.appendChild(label);
+    }
+
+    // 堆叠面积
+    var cum = series.map(function () { return 0; });
+    TRAFFIC_KEYS.forEach(function (key) {
+      var color = css(TRAFFIC_COLOR_VAR[key]);
+      var topPoints = [];
+      var bottomPoints = [];
+      series.forEach(function (s, i) {
+        var base = cum[i];
+        var top = base + s[key];
+        cum[i] = top;
+        topPoints.push([xAt(i), yAt(top)]);
+        bottomPoints.push([xAt(i), yAt(base)]);
+      });
+      var d = 'M ' + topPoints.map(function (p) { return p[0] + ' ' + p[1]; }).join(' L ');
+      for (var i = bottomPoints.length - 1; i >= 0; i--) d += ' L ' + bottomPoints[i][0] + ' ' + bottomPoints[i][1];
+      d += ' Z';
+      var path = document.createElementNS(svgns, 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('fill', color);
+      path.setAttribute('fill-opacity', '0.55');
+      svg.appendChild(path);
+
+      var line2 = document.createElementNS(svgns, 'polyline');
+      line2.setAttribute('points', topPoints.map(function (p) { return p[0] + ',' + p[1]; }).join(' '));
+      line2.setAttribute('fill', 'none');
+      line2.setAttribute('stroke', color);
+      line2.setAttribute('stroke-width', '2');
+      line2.setAttribute('stroke-linejoin', 'round');
+      line2.setAttribute('stroke-linecap', 'round');
+      svg.appendChild(line2);
+    });
+
+    // x 轴基线
+    var axis = document.createElementNS(svgns, 'line');
+    axis.setAttribute('x1', padL); axis.setAttribute('x2', width - padR);
+    axis.setAttribute('y1', padT + plotH); axis.setAttribute('y2', padT + plotH);
+    axis.setAttribute('stroke', baseline); axis.setAttribute('stroke-width', '1');
+    svg.appendChild(axis);
+
+    // x 轴标签（稀疏，避免拥挤）
+    var maxLabels = Math.min(n, range === '24h' ? 8 : (range === '7d' ? 7 : 10));
+    var labelEvery = Math.max(1, Math.round(n / maxLabels));
+    series.forEach(function (s, i) {
+      if (i % labelEvery !== 0 && i !== n - 1) return;
+      var label = document.createElementNS(svgns, 'text');
+      label.setAttribute('x', xAt(i)); label.setAttribute('y', height - 8);
+      label.setAttribute('text-anchor', 'middle'); label.setAttribute('font-size', '11'); label.setAttribute('fill', muted);
+      label.textContent = formatKeyLabel(s.key, range);
+      svg.appendChild(label);
+    });
+
+    // 交互层：crosshair + tooltip
+    var hit = document.createElementNS(svgns, 'rect');
+    hit.setAttribute('x', padL); hit.setAttribute('y', padT);
+    hit.setAttribute('width', plotW); hit.setAttribute('height', plotH);
+    hit.setAttribute('fill', 'transparent');
+    svg.appendChild(hit);
+
+    var crosshair = document.createElementNS(svgns, 'line');
+    crosshair.setAttribute('y1', padT); crosshair.setAttribute('y2', padT + plotH);
+    crosshair.setAttribute('stroke', baseline); crosshair.setAttribute('stroke-width', '1');
+    crosshair.setAttribute('visibility', 'hidden');
+    svg.appendChild(crosshair);
+
+    var tooltip = document.getElementById('trafficTooltip');
+    var shell = svg.parentElement;
+
+    function onMove(evt) {
+      var rect = svg.getBoundingClientRect();
+      var px = (evt.clientX - rect.left) * (width / rect.width);
+      var idx = stepX > 0 ? Math.round((px - padL) / stepX) : 0;
+      idx = Math.max(0, Math.min(n - 1, idx));
+      var s = series[idx];
+      if (!s) return;
+      var cx = xAt(idx);
+      crosshair.setAttribute('x1', cx); crosshair.setAttribute('x2', cx);
+      crosshair.setAttribute('visibility', 'visible');
+
+      var rows = TRAFFIC_KEYS.map(function (key) {
+        return '<div class="t-row"><span class="t-key"><span class="line" style="background:' + css(TRAFFIC_COLOR_VAR[key]) + '"></span>' + TRAFFIC_LABELS[key] + '</span><span class="t-val">' + compact(s[key]) + '</span></div>';
+      }).join('');
+      tooltip.innerHTML = '<div class="t-date">' + s.key + ' &middot; ' + fmtInt.format(s.requestCount) + ' 次请求</div>' + rows;
+      tooltip.style.visibility = 'visible';
+      var shellRect = shell.getBoundingClientRect();
+      var left = (cx / width) * shellRect.width;
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = '0px';
+    }
+    function onLeave() {
+      crosshair.setAttribute('visibility', 'hidden');
+      tooltip.style.visibility = 'hidden';
+    }
+    hit.addEventListener('pointermove', onMove);
+    hit.addEventListener('pointerleave', onLeave);
+  }
+
+  function niceCeil(v) {
+    if (v <= 0) return 1;
+    var exp = Math.floor(Math.log10(v));
+    var base = Math.pow(10, exp);
+    var mult = v / base;
+    var nice = mult <= 1 ? 1 : mult <= 2 ? 2 : mult <= 5 ? 5 : 10;
+    return nice * base;
+  }
+
+  function renderTrafficTable(series) {
+    var wrap = document.getElementById('trafficTable');
+    var table = document.createElement('table');
+    table.className = 'data-table';
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    ['时间', '输入', '输出', '缓存写入', '缓存读取', '合计', '请求数'].forEach(function (h) {
+      var th = document.createElement('th');
+      setText(th, h);
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    var tbody = document.createElement('tbody');
+    series.forEach(function (s) {
+      var tr = document.createElement('tr');
+      [s.key, compact(s.input), compact(s.output), compact(s.cacheCreation), compact(s.cacheRead), compact(s.total), fmtInt.format(s.requestCount)].forEach(function (v) {
+        var td = document.createElement('td');
+        setText(td, v);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    wrap.innerHTML = '';
+    wrap.appendChild(table);
+  }
+
+  // ---- 模型分布：横向条形图（单一序列量级比较） ----
+  function renderModelChart(byModel) {
+    var svg = document.getElementById('modelChart');
+    var rows = byModel.slice(0, 8); // 超过 8 个模型收进表格即可，条形图不再无限增高
+    var width = svg.clientWidth || 800;
+    var rowH = 34;
+    var padL = 130, padR = 70, padT = 8, padB = 8;
+    var plotW = width - padL - padR;
+    var height = rows.length * rowH + padT + padB;
+    var maxTotal = 0;
+    rows.forEach(function (r) { if (r.total > maxTotal) maxTotal = r.total; });
+    if (maxTotal <= 0) maxTotal = 1;
+
+    var svgns = 'http://www.w3.org/2000/svg';
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+
+    var color = css('--seq-450');
+    var muted = css('--text-muted');
+    var primary = css('--text-primary');
+
+    var tooltip = document.getElementById('modelTooltip');
+
+    rows.forEach(function (r, i) {
+      var y = padT + i * rowH;
+      var barH = 20;
+      var barW = Math.max(2, (r.total / maxTotal) * plotW);
+
+      var label = document.createElementNS(svgns, 'text');
+      label.setAttribute('x', padL - 10); label.setAttribute('y', y + barH / 2 + 4);
+      label.setAttribute('text-anchor', 'end'); label.setAttribute('font-size', '12'); label.setAttribute('fill', primary);
+      label.textContent = r.model;
+      svg.appendChild(label);
+
+      var track = document.createElementNS(svgns, 'rect');
+      track.setAttribute('x', padL); track.setAttribute('y', y);
+      track.setAttribute('width', plotW); track.setAttribute('height', barH);
+      track.setAttribute('rx', 4);
+      track.setAttribute('fill', css('--gridline'));
+      svg.appendChild(track);
+
+      var bar = document.createElementNS(svgns, 'rect');
+      bar.setAttribute('x', padL); bar.setAttribute('y', y);
+      bar.setAttribute('width', barW); bar.setAttribute('height', barH);
+      bar.setAttribute('rx', 4);
+      bar.setAttribute('fill', color);
+      svg.appendChild(bar);
+
+      var hit = document.createElementNS(svgns, 'rect');
+      hit.setAttribute('x', padL); hit.setAttribute('y', y - 2);
+      hit.setAttribute('width', plotW); hit.setAttribute('height', barH + 4);
+      hit.setAttribute('fill', 'transparent');
+      svg.appendChild(hit);
+
+      var valueLabel = document.createElementNS(svgns, 'text');
+      var insideFits = barW > 60;
+      valueLabel.setAttribute('y', y + barH / 2 + 4);
+      valueLabel.setAttribute('font-size', '12');
+      if (insideFits) {
+        valueLabel.setAttribute('x', padL + barW - 8);
+        valueLabel.setAttribute('text-anchor', 'end');
+        valueLabel.setAttribute('fill', '#ffffff');
+      } else {
+        valueLabel.setAttribute('x', padL + barW + 8);
+        valueLabel.setAttribute('text-anchor', 'start');
+        valueLabel.setAttribute('fill', primary);
+      }
+      valueLabel.textContent = compact(r.total);
+      svg.appendChild(valueLabel);
+
+      hit.addEventListener('pointermove', function (evt) {
+        var rect = svg.getBoundingClientRect();
+        tooltip.innerHTML =
+          '<div class="t-date">' + r.model + (r.tier ? ' &middot; ' + tierLabel(r.tier) : '') + '</div>' +
+          tRow('请求数', fmtInt.format(r.requestCount)) +
+          tRow('Token 合计', compact(r.total)) +
+          tRow('均次输出', compact(r.avgOutput)) +
+          tRow('缓存读占比', pct(r.cacheReadShare));
+        tooltip.style.visibility = 'visible';
+        tooltip.style.left = (evt.clientX - rect.left) + 'px';
+        tooltip.style.top = (y) + 'px';
+      });
+      hit.addEventListener('pointerleave', function () { tooltip.style.visibility = 'hidden'; });
+    });
+
+    function tRow(k, v) {
+      return '<div class="t-row"><span class="t-key">' + k + '</span><span class="t-val">' + v + '</span></div>';
+    }
+  }
+
+  function tierLabel(tier) {
+    return { advanced: '高级', balanced: '均衡', economy: '节省' }[tier] || tier;
+  }
+
+  function renderModelTable(byModel) {
+    var table = document.getElementById('modelTable');
+    table.innerHTML = '';
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    ['模型', '档位', '请求数', 'Token 合计', '均次输出', '缓存读占比'].forEach(function (h) {
+      var th = document.createElement('th');
+      setText(th, h);
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    var tbody = document.createElement('tbody');
+    byModel.forEach(function (m) {
+      var tr = document.createElement('tr');
+      var tdModel = document.createElement('td');
+      setText(tdModel, m.model);
+      tr.appendChild(tdModel);
+
+      var tdTier = document.createElement('td');
+      var badge = document.createElement('span');
+      badge.className = 'tier-badge ' + (m.tier || 'none');
+      setText(badge, m.tier ? tierLabel(m.tier) : '未配置');
+      tdTier.appendChild(badge);
+      tr.appendChild(tdTier);
+
+      [fmtInt.format(m.requestCount), compact(m.total), compact(m.avgOutput), pct(m.cacheReadShare)].forEach(function (v) {
+        var td = document.createElement('td');
+        setText(td, v);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(thead);
+    table.appendChild(tbody);
+  }
+
+  // ---- 建议 ----
+  function renderAdvice(advice) {
+    var list = document.getElementById('adviceList');
+    list.innerHTML = '';
+    if (!advice || advice.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'empty';
+      setText(empty, '窗口内数据不足，暂无建议。');
+      list.appendChild(empty);
+      return;
+    }
+    advice.forEach(function (a) {
+      var card = document.createElement('div');
+      card.className = 'advice-card';
+      var dot = document.createElement('div');
+      dot.className = 'dot';
+      var body = document.createElement('div');
+      body.className = 'body';
+      var h3 = document.createElement('h3');
+      setText(h3, a.title);
+      var p = document.createElement('p');
+      setText(p, a.evidence);
+      body.appendChild(h3);
+      body.appendChild(p);
+      card.appendChild(dot);
+      card.appendChild(body);
+      list.appendChild(card);
+    });
+  }
+
+  // ---- 拉取数据 ----
+  // 离线横幅。断网时 Service Worker 会把页面外壳从缓存里拿出来，
+  // 所有面板都是空的 —— 不明确说出来，看起来就像「数据丢了」而不是「连不上」。
+  function setOffline(isOffline, detail) {
+    var el = document.getElementById('offlineBanner');
+    if (!el) return;
+    if (isOffline) {
+      setText(document.getElementById('offlineDetail'), detail ||
+        '无法连接数据服务（' + (location.host || '未知') + '）。PC 在线时应显示实时数据；PC 关闭时应显示最近一次云端快照。');
+    }
+    el.hidden = !isOffline;
+  }
+
+  function load(range) {
+    var wrap = document.querySelector('.wrap');
+    wrap.style.opacity = '0.6';
+    apiFetch('/api/stats?range=' + range)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        // 401 不能当成「连不上」：fetch 在 401 时是 resolve 的，
+        // 真实原因是令牌缺失或失效，提示得说对方向。
+        if (d && d.error === 'unauthorized') {
+          wrap.style.opacity = '1';
+          setOffline(true, '云端令牌缺失或已失效。请用带 #k=<令牌> 的地址重新打开。');
+          return;
+        }
+        state.lastData = d;
+        renderAll(d, range);
+        wrap.style.opacity = '1';
+        setOffline(false);
+      })
+      .catch(function () {
+        wrap.style.opacity = '1';
+        // 连不上服务器时这里原本什么都不显示，整个页面就是一片空白。
+        // 手机上连不回 PC 是很常见的情况，失败必须有明确出口。
+        setOffline(true);
+        setText(document.getElementById('footTip'), '连不上服务器，页面可能不是最新数据。');
+      });
+  }
+
+  function renderAll(d, range) {
+    renderKpis(d);
+    renderTrafficLegend();
+    renderTrafficChart(d.series, range);
+    renderTrafficTable(d.series);
+    renderModelChart(d.byModel);
+    renderModelTable(d.byModel);
+    renderAdvice(d.advice);
+
+    // noSnapshot / snapshotAt 是云端快照特有的字段。直接连 PC 的响应里没有它们，
+    // 所以本地页面的观感与改造前完全一致。
+    var note = document.getElementById('snapshotNote');
+    if (note) {
+      if (d.noSnapshot) {
+        note.hidden = false;
+        setText(note, '云端还没有快照：PC 端首次上传后即可显示。');
+      } else if (d.snapshotAt) {
+        note.hidden = false;
+        setText(note, '云端快照 · ' + new Date(d.snapshotAt).toLocaleString('zh-CN', { hour12: false }) + '（PC 关闭时显示的就是这份数据）');
+      } else {
+        note.hidden = true;
+      }
+    }
+
+    setText(document.getElementById('footTip'), d.noSnapshot
+      ? '尚无数据：PC 端首次上传快照后就会出现。'
+      : '扫描到 ' + d.filesScanned + ' 个会话日志文件；Token 与渠道费用每 60 秒自动刷新，也可点右上角 ⟳ 手动刷新。');
+  }
+
+  document.getElementById('rangeSwitch').addEventListener('click', function (evt) {
+    var btn = evt.target.closest('button');
+    if (!btn) return;
+    document.querySelectorAll('#rangeSwitch button').forEach(function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    state.range = btn.dataset.range;
+    load(state.range);
+  });
+
+  document.getElementById('refreshBtn').addEventListener('click', function () { load(state.range); });
+
+  document.querySelectorAll('.table-toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var target = document.getElementById(btn.dataset.target);
+      target.hidden = !target.hidden;
+      setText(btn, target.hidden ? '查看数据表' : '收起数据表');
+    });
+  });
+
+  window.addEventListener('resize', function () {
+    if (state.lastData) renderAll(state.lastData, state.range);
+  });
+
+  load(state.range);
+  setInterval(function () { load(state.range); }, REFRESH_MS);
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    });
+  }
+})();
+</script>
+</body>
+</html>
